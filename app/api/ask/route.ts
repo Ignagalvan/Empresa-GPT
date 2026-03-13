@@ -1,24 +1,44 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase";
+import { getSupabaseAdmin } from "@/lib/supabase";
 import { createEmbedding } from "@/lib/embeddings";
 import { cosineSimilarity } from "@/lib/cosineSimilarity";
-import { openai } from "@/lib/openai";
+import { getOpenAI } from "@/lib/openai";
 
 type ChunkRow = {
     id: string;
     content: string;
     embedding: number[];
     document_id: string;
+    documents?: {
+        filename?: string;
+    } | null;
 };
 
 export async function POST(req: Request) {
+    const supabaseAdmin = getSupabaseAdmin();
+
     try {
         const body = await req.json();
-        const { companyId, question } = body;
+        const companyId = body?.companyId?.trim?.();
+        const question = body?.question?.trim?.();
 
-        if (!companyId || !question) {
+        if (!companyId) {
             return NextResponse.json(
-                { error: "Faltan datos obligatorios" },
+                { error: "Falta el companyId." },
+                { status: 400 }
+            );
+        }
+
+        if (!question) {
+            return NextResponse.json(
+                { error: "Falta la pregunta." },
+                { status: 400 }
+            );
+        }
+
+        if (question.length < 3) {
+            return NextResponse.json(
+                { error: "La pregunta es demasiado corta." },
                 { status: 400 }
             );
         }
@@ -27,7 +47,7 @@ export async function POST(req: Request) {
 
         const { data, error } = await supabaseAdmin
             .from("document_chunks")
-            .select("id, content, embedding, document_id")
+            .select(`id, content, embedding, document_id, documents (filename)`)
             .eq("company_id", companyId);
 
         if (error) {
@@ -35,6 +55,13 @@ export async function POST(req: Request) {
         }
 
         const chunks = (data || []) as ChunkRow[];
+
+        if (chunks.length === 0) {
+            return NextResponse.json({
+                answer: "No encontré documentos cargados para esa empresa.",
+                sources: [],
+            });
+        }
 
         const ranked = chunks
             .map((chunk) => ({
@@ -51,8 +78,7 @@ export async function POST(req: Request) {
         const prompt = `
 Sos un asistente interno de una empresa.
 Respondé únicamente usando el contexto provisto.
-Si la respuesta no está en el contexto, decí exactamente:
-"No encontré esa información en los documentos cargados".
+Si la respuesta no está en el contexto, decí exactamente: "No encontré esa información en los documentos cargados."
 
 Contexto:
 ${context}
@@ -61,12 +87,16 @@ Pregunta:
 ${question}
 `;
 
+        const openai = getOpenAI();
+
         const response = await openai.responses.create({
             model: "gpt-4.1-mini",
             input: prompt,
         });
 
-        const answer = response.output_text ?? "No se pudo generar una respuesta.";
+        const answer =
+            response.output_text?.trim() ||
+            "No encontré esa información en los documentos cargados.";
 
         await supabaseAdmin.from("chat_messages").insert([
             { company_id: companyId, role: "user", content: question },
@@ -76,7 +106,7 @@ ${question}
         return NextResponse.json({
             answer,
             sources: ranked.map((r) => ({
-                documentId: r.document_id,
+                documentId: r.documents?.filename || r.document_id,
                 preview: r.content.slice(0, 180),
                 score: r.score,
             })),
@@ -85,7 +115,12 @@ ${question}
         console.error("Error en /api/ask:", error);
 
         return NextResponse.json(
-            { error: "Error al responder la consulta" },
+            {
+                error:
+                    error instanceof Error
+                        ? error.message
+                        : "Error al responder la consulta.",
+            },
             { status: 500 }
         );
     }

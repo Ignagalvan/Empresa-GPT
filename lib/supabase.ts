@@ -1,12 +1,39 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { getPublicEnv, getServerEnv } from "./env";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+let supabaseClientInstance: SupabaseClient | null = null;
+let supabaseAdminInstance: SupabaseClient | null = null;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export function getSupabase(): SupabaseClient {
+    if (supabaseClientInstance) return supabaseClientInstance;
 
-export const supabaseAdmin = createClient(
-    supabaseUrl,
-    supabaseServiceRoleKey
-);
+    const { NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY } =
+        getPublicEnv();
+
+    supabaseClientInstance = createClient(
+        NEXT_PUBLIC_SUPABASE_URL,
+        NEXT_PUBLIC_SUPABASE_ANON_KEY
+    );
+
+    return supabaseClientInstance;
+}
+
+export function getSupabaseAdmin(): SupabaseClient {
+    if (supabaseAdminInstance) return supabaseAdminInstance;
+
+    const { NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } =
+        getServerEnv();
+
+    supabaseAdminInstance = createClient(
+        NEXT_PUBLIC_SUPABASE_URL,
+        SUPABASE_SERVICE_ROLE_KEY,
+        {
+            auth: {
+                autoRefreshToken: false,
+                persistSession: false,
+            },
+        }
+    );
+
+    return supabaseAdminInstance;
+}

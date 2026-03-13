@@ -9,6 +9,13 @@ type DocumentItem = {
 };
 
 type UploadMode = "pdf" | "manual";
+type MessageType = "success" | "error" | "";
+
+type SourceItem = {
+    documentId: string;
+    preview: string;
+    score: number;
+};
 
 export default function DashboardPage() {
     const [mode, setMode] = useState<UploadMode>("pdf");
@@ -24,10 +31,12 @@ export default function DashboardPage() {
     const [asking, setAsking] = useState(false);
 
     const [message, setMessage] = useState("");
+    const [messageType, setMessageType] = useState<MessageType>("");
     const [lastChunks, setLastChunks] = useState<number | null>(null);
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [documents, setDocuments] = useState<DocumentItem[]>([]);
     const [documentsLoading, setDocumentsLoading] = useState(false);
+    const [sources, setSources] = useState<SourceItem[]>([]);
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -51,7 +60,9 @@ export default function DashboardPage() {
             );
             const data = await res.json();
 
-            if (!res.ok) return;
+            if (!res.ok) {
+                return;
+            }
 
             setDocuments(data.documents || []);
         } finally {
@@ -69,18 +80,21 @@ export default function DashboardPage() {
 
     async function handleManualUpload() {
         try {
-            if (!companyId) {
+            if (!companyId.trim()) {
+                setMessageType("error");
                 setMessage("Primero ingresá el Company ID.");
                 return;
             }
 
             if (!filename.trim() || !text.trim()) {
+                setMessageType("error");
                 setMessage("Para carga manual completá el nombre y el texto.");
                 return;
             }
 
             setUploading(true);
             setMessage("");
+            setMessageType("");
 
             const res = await fetch("/api/ingest", {
                 method: "POST",
@@ -97,6 +111,7 @@ export default function DashboardPage() {
             const data = await res.json();
 
             if (!res.ok) {
+                setMessageType("error");
                 setMessage(data.error || "No se pudo procesar el texto manual.");
                 return;
             }
@@ -104,13 +119,14 @@ export default function DashboardPage() {
             setLastChunks(data.chunksCreated ?? null);
             setFilename("");
             setText("");
-
+            setMessageType("success");
             setMessage(
                 `Documento manual cargado correctamente. Se generaron ${data.chunksCreated} fragmentos.`
             );
 
             await loadDocuments(companyId);
         } catch {
+            setMessageType("error");
             setMessage("Ocurrió un error al cargar el texto manual.");
         } finally {
             setUploading(false);
@@ -119,18 +135,21 @@ export default function DashboardPage() {
 
     async function handlePdfUpload() {
         try {
-            if (!companyId) {
+            if (!companyId.trim()) {
+                setMessageType("error");
                 setMessage("Primero ingresá el Company ID.");
                 return;
             }
 
             if (!pdfFile) {
+                setMessageType("error");
                 setMessage("Seleccioná un archivo PDF.");
                 return;
             }
 
             setPdfUploading(true);
             setMessage("");
+            setMessageType("");
 
             const formData = new FormData();
             formData.append("companyId", companyId);
@@ -144,6 +163,7 @@ export default function DashboardPage() {
             const data = await res.json();
 
             if (!res.ok) {
+                setMessageType("error");
                 setMessage(data.error || "No se pudo procesar el PDF.");
                 return;
             }
@@ -155,12 +175,15 @@ export default function DashboardPage() {
                 fileInputRef.current.value = "";
             }
 
+            setMessageType("success");
             setMessage(
-                `PDF cargado correctamente: ${data.document?.filename || "archivo"}. Se generaron ${data.chunksCreated} fragmentos.`
+                `PDF cargado correctamente: ${data.document?.filename || data.filename || "archivo"
+                }. Se generaron ${data.chunksCreated} fragmentos.`
             );
 
             await loadDocuments(companyId);
         } catch {
+            setMessageType("error");
             setMessage("Ocurrió un error al subir el PDF.");
         } finally {
             setPdfUploading(false);
@@ -169,18 +192,21 @@ export default function DashboardPage() {
 
     async function handleAsk() {
         try {
-            if (!companyId) {
+            if (!companyId.trim()) {
                 setAnswer("Primero ingresá el Company ID.");
+                setSources([]);
                 return;
             }
 
             if (!question.trim()) {
                 setAnswer("Escribí una pregunta.");
+                setSources([]);
                 return;
             }
 
             setAsking(true);
             setAnswer("");
+            setSources([]);
 
             const res = await fetch("/api/ask", {
                 method: "POST",
@@ -197,12 +223,15 @@ export default function DashboardPage() {
 
             if (!res.ok) {
                 setAnswer(data.error || "No se pudo obtener una respuesta.");
+                setSources([]);
                 return;
             }
 
             setAnswer(data.answer || "Sin respuesta.");
+            setSources(data.sources || []);
         } catch {
             setAnswer("Ocurrió un error al consultar.");
+            setSources([]);
         } finally {
             setAsking(false);
         }
@@ -213,10 +242,19 @@ export default function DashboardPage() {
         setText("");
         setPdfFile(null);
         setMessage("");
+        setMessageType("");
 
         if (fileInputRef.current) {
             fileInputRef.current.value = "";
         }
+    }
+
+    function getMessageClasses() {
+        if (messageType === "error") {
+            return "mt-5 whitespace-pre-wrap rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-4 text-sm leading-6 text-rose-300";
+        }
+
+        return "mt-5 whitespace-pre-wrap rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-4 text-sm leading-6 text-emerald-300";
     }
 
     return (
@@ -494,11 +532,7 @@ export default function DashboardPage() {
                                         </div>
                                     )}
 
-                                    {message && (
-                                        <div className="mt-5 whitespace-pre-wrap rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-4 text-sm leading-6 text-emerald-300">
-                                            {message}
-                                        </div>
-                                    )}
+                                    {message && <div className={getMessageClasses()}>{message}</div>}
                                 </div>
 
                                 <div className="rounded-[28px] border border-white/10 bg-white/5 p-6 shadow-2xl backdrop-blur-xl">
@@ -596,6 +630,36 @@ export default function DashboardPage() {
                                             {answer ||
                                                 "Todavía no hay respuesta. Primero cargá uno o más documentos y después hacé una pregunta."}
                                         </div>
+
+                                        {sources.length > 0 && (
+                                            <div className="mt-6 border-t border-white/10 pt-5">
+                                                <div className="mb-3 text-sm font-semibold uppercase tracking-[0.14em] text-cyan-300">
+                                                    Fuentes utilizadas
+                                                </div>
+
+                                                <div className="space-y-3">
+                                                    {sources.map((source, index) => (
+                                                        <div
+                                                            key={`${source.documentId}-${index}`}
+                                                            className="rounded-2xl border border-white/10 bg-white/5 p-4"
+                                                        >
+                                                            <div className="mb-2 flex items-center justify-between gap-3">
+                                                                <div className="text-sm font-medium text-white">
+                                                                    Documento: {source.documentId}
+                                                                </div>
+                                                                <div className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1 text-xs text-cyan-300">
+                                                                    Relevancia: {Math.round((source.score || 0) * 100)}%
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="text-sm leading-6 text-slate-300">
+                                                                {source.preview}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>

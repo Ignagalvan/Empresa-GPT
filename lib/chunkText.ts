@@ -1,25 +1,84 @@
+type ChunkOptions = {
+    maxChunkLength?: number;
+    overlap?: number;
+    minChunkLength?: number;
+};
+
+function normalizeText(text: string): string {
+    return text
+        .replace(/\r/g, "\n")
+        .replace(/[ \t]+/g, " ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
+
+function splitIntoParagraphs(text: string): string[] {
+    return text
+        .split(/\n\s*\n/g)
+        .map((part) => part.trim())
+        .filter(Boolean);
+}
+
 export function chunkText(
     text: string,
-    chunkSize: number = 1200,
-    overlap: number = 200
+    options: ChunkOptions = {}
 ): string[] {
-    if (!text) return [];
+    const maxChunkLength = options.maxChunkLength ?? 1200;
+    const overlap = options.overlap ?? 200;
+    const minChunkLength = options.minChunkLength ?? 200;
 
-    const chunks: string[] = [];
-    let start = 0;
+    const normalized = normalizeText(text);
 
-    while (start < text.length) {
-        const end = Math.min(start + chunkSize, text.length);
-        const chunk = text.slice(start, end).trim();
-
-        if (chunk) {
-            chunks.push(chunk);
-        }
-
-        if (end === text.length) break;
-
-        start += chunkSize - overlap;
+    if (!normalized) {
+        return [];
     }
 
-    return chunks;
+    if (normalized.length <= maxChunkLength) {
+        return [normalized];
+    }
+
+    const paragraphs = splitIntoParagraphs(normalized);
+    const chunks: string[] = [];
+
+    let currentChunk = "";
+
+    for (const paragraph of paragraphs) {
+        if (!currentChunk) {
+            currentChunk = paragraph;
+            continue;
+        }
+
+        const candidate = `${currentChunk}\n\n${paragraph}`;
+
+        if (candidate.length <= maxChunkLength) {
+            currentChunk = candidate;
+            continue;
+        }
+
+        if (currentChunk.length >= minChunkLength) {
+            chunks.push(currentChunk);
+        } else {
+            currentChunk = candidate.slice(0, maxChunkLength);
+            chunks.push(currentChunk);
+        }
+
+        const tail = currentChunk.slice(-overlap).trim();
+        currentChunk = tail ? `${tail}\n\n${paragraph}` : paragraph;
+
+        while (currentChunk.length > maxChunkLength) {
+            const forcedChunk = currentChunk.slice(0, maxChunkLength).trim();
+            if (forcedChunk) {
+                chunks.push(forcedChunk);
+            }
+
+            const rest = currentChunk.slice(maxChunkLength - overlap).trim();
+            currentChunk = rest;
+        }
+    }
+
+    if (currentChunk.trim()) {
+        chunks.push(currentChunk.trim());
+    }
+
+    return chunks.filter((chunk) => chunk.trim().length > 0);
 }

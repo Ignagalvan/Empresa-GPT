@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase";
+import { getSupabaseAdmin } from "@/lib/supabase";
 import { chunkText } from "@/lib/chunkText";
 import { createEmbedding } from "@/lib/embeddings";
 
@@ -12,13 +12,31 @@ function normalizeManualText(text: string) {
 }
 
 export async function POST(req: Request) {
+    const supabaseAdmin = getSupabaseAdmin();
+
     try {
         const body = await req.json();
-        const { companyId, filename, text } = body;
+        const companyId = body?.companyId?.trim?.();
+        const filename = body?.filename?.trim?.();
+        const text = body?.text?.trim?.();
 
-        if (!companyId || !filename || !text) {
+        if (!companyId) {
             return NextResponse.json(
-                { error: "Faltan datos obligatorios." },
+                { error: "Falta el companyId." },
+                { status: 400 }
+            );
+        }
+
+        if (!filename) {
+            return NextResponse.json(
+                { error: "Falta el nombre del documento." },
+                { status: 400 }
+            );
+        }
+
+        if (!text) {
+            return NextResponse.json(
+                { error: "Falta el texto a procesar." },
                 { status: 400 }
             );
         }
@@ -48,6 +66,13 @@ export async function POST(req: Request) {
 
         const chunks = chunkText(normalizedText);
 
+        if (!chunks.length) {
+            return NextResponse.json(
+                { error: "No se pudieron generar fragmentos del texto." },
+                { status: 400 }
+            );
+        }
+
         for (let i = 0; i < chunks.length; i++) {
             const embedding = await createEmbedding(chunks[i]);
 
@@ -74,12 +99,18 @@ export async function POST(req: Request) {
                 created_at: document.created_at,
             },
             chunksCreated: chunks.length,
+            message: "Texto procesado correctamente.",
         });
     } catch (error) {
         console.error("Error en /api/ingest:", error);
 
         return NextResponse.json(
-            { error: "Error al procesar el documento manual." },
+            {
+                error:
+                    error instanceof Error
+                        ? error.message
+                        : "Error al procesar el documento manual.",
+            },
             { status: 500 }
         );
     }

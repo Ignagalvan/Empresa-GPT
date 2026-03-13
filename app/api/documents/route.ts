@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase";
+import { getSupabaseAdmin } from "@/lib/supabase";
 
 export async function GET(req: Request) {
     try {
         const { searchParams } = new URL(req.url);
-        const companyId = searchParams.get("companyId");
+        const companyId = searchParams.get("companyId")?.trim() || "";
 
         if (!companyId) {
             return NextResponse.json(
@@ -12,6 +12,8 @@ export async function GET(req: Request) {
                 { status: 400 }
             );
         }
+
+        const supabaseAdmin = getSupabaseAdmin();
 
         const { data, error } = await supabaseAdmin
             .from("documents")
@@ -29,9 +31,11 @@ export async function GET(req: Request) {
     } catch (error) {
         console.error("Error en /api/documents:", error);
 
-        return NextResponse.json(
-            { error: "No se pudieron obtener los documentos." },
-            { status: 500 }
-        );
+        const message =
+            error instanceof Error
+                ? error.message
+                : "No se pudieron obtener los documentos.";
+
+        return NextResponse.json({ error: message }, { status: 500 });
     }
 }

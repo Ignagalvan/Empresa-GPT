@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import "pdf-parse/worker";
 import { PDFParse } from "pdf-parse";
-import { supabaseAdmin } from "@/lib/supabase";
+import { getSupabaseAdmin } from "@/lib/supabase";
 import { chunkText } from "@/lib/chunkText";
 import { createEmbedding } from "@/lib/embeddings";
 
@@ -16,22 +16,37 @@ function normalizeExtractedText(text: string) {
 }
 
 export async function POST(req: Request) {
+    const supabaseAdmin = getSupabaseAdmin();
+
     try {
         const formData = await req.formData();
-
-        const companyId = formData.get("companyId") as string | null;
+        const companyId = String(formData.get("companyId") || "").trim();
         const file = formData.get("file") as File | null;
 
-        if (!companyId || !file) {
+        if (!companyId) {
             return NextResponse.json(
-                { error: "Faltan el Company ID o el archivo PDF." },
+                { error: "Falta el companyId." },
+                { status: 400 }
+            );
+        }
+
+        if (!file) {
+            return NextResponse.json(
+                { error: "No se recibió ningún archivo PDF." },
+                { status: 400 }
+            );
+        }
+
+        if (file.size === 0) {
+            return NextResponse.json(
+                { error: "El archivo PDF está vacío." },
                 { status: 400 }
             );
         }
 
         if (file.type !== "application/pdf") {
             return NextResponse.json(
-                { error: "El archivo seleccionado no es un PDF." },
+                { error: "El archivo seleccionado no es un PDF válido." },
                 { status: 400 }
             );
         }
@@ -45,11 +60,21 @@ export async function POST(req: Request) {
 
         const extractedText = normalizeExtractedText(result?.text || "");
 
-        if (!extractedText || extractedText.length < 20) {
+        if (!extractedText) {
             return NextResponse.json(
                 {
                     error:
-                        "No se pudo leer texto útil del PDF. Puede estar escaneado, vacío o mal generado.",
+                        "No se pudo extraer texto del PDF. Puede estar vacío, protegido o ser un PDF escaneado.",
+                },
+                { status: 400 }
+            );
+        }
+
+        if (extractedText.length < 20) {
+            return NextResponse.json(
+                {
+                    error:
+                        "El PDF tiene muy poco texto legible. Puede ser un PDF escaneado o contener solo imágenes.",
                 },
                 { status: 400 }
             );
@@ -70,6 +95,13 @@ export async function POST(req: Request) {
         }
 
         const chunks = chunkText(extractedText);
+
+        if (!chunks.length) {
+            return NextResponse.json(
+                { error: "No se pudieron generar fragmentos del PDF." },
+                { status: 400 }
+            );
+        }
 
         for (let i = 0; i < chunks.length; i++) {
             const embedding = await createEmbedding(chunks[i]);
@@ -98,6 +130,7 @@ export async function POST(req: Request) {
             },
             chunksCreated: chunks.length,
             extractedPreview: extractedText.slice(0, 300),
+            message: "PDF procesado correctamente.",
         });
     } catch (error) {
         console.error("Error en /api/upload-pdf:", error);
