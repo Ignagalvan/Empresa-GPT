@@ -1,54 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
-
-const STORAGE_KEY = "empresa_gpt_company_id";
+import { useContext } from "react";
+import { CompanyContext } from "@/components/providers/CompanyProvider";
 
 export function useCompanyContext() {
-    const searchParams = useSearchParams();
+    const context = useContext(CompanyContext);
 
-    const queryCompanyId = useMemo(() => {
-        return searchParams.get("companyId")?.trim() || "";
-    }, [searchParams]);
-
-    const [companyId, setCompanyIdState] = useState("");
-
-    useEffect(() => {
-        const saved =
-            typeof window !== "undefined"
-                ? window.localStorage.getItem(STORAGE_KEY) || ""
-                : "";
-
-        if (queryCompanyId) {
-            setCompanyIdState(queryCompanyId);
-
-            if (typeof window !== "undefined") {
-                window.localStorage.setItem(STORAGE_KEY, queryCompanyId);
-            }
-            return;
-        }
-
-        if (saved) {
-            setCompanyIdState(saved);
-        }
-    }, [queryCompanyId]);
-
-    function setCompanyId(value: string) {
-        const trimmed = value.trim();
-        setCompanyIdState(trimmed);
-
-        if (typeof window !== "undefined") {
-            if (trimmed) {
-                window.localStorage.setItem(STORAGE_KEY, trimmed);
-            } else {
-                window.localStorage.removeItem(STORAGE_KEY);
-            }
-        }
+    if (!context) {
+        throw new Error(
+            "useCompanyContext debe usarse dentro de <CompanyProvider>"
+        );
     }
 
-    return {
-        companyId,
-        setCompanyId,
-    };
+    return context;
 }

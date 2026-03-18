@@ -13,6 +13,13 @@ type ChunkRow = {
     filename?: string;
 };
 
+const MIN_SIMILARITY = 0.45;
+const MIN_STRONG_MATCHES = 1;
+
+function buildNoContextAnswer() {
+    return "No encontré información suficiente en los documentos cargados para responder con confianza.";
+}
+
 export async function POST(req: Request) {
     const supabaseAdmin = getSupabaseAdmin();
 
@@ -100,6 +107,8 @@ export async function POST(req: Request) {
         const ranked = (data || []) as ChunkRow[];
 
         if (ranked.length === 0) {
+            const noContextAnswer = "No encontré documentos cargados para esa empresa.";
+
             await supabaseAdmin.from("chat_messages").insert([
                 {
                     company_id: companyId,
@@ -111,18 +120,47 @@ export async function POST(req: Request) {
                     company_id: companyId,
                     conversation_id: conversationId,
                     role: "assistant",
-                    content: "No encontré documentos cargados para esa empresa.",
+                    content: noContextAnswer,
                 },
             ]);
 
             return NextResponse.json({
-                answer: "No encontré documentos cargados para esa empresa.",
+                answer: noContextAnswer,
                 sources: [],
                 conversationId,
             });
         }
 
-        const context = ranked
+        const strongMatches = ranked.filter(
+            (chunk) => (chunk.similarity || 0) >= MIN_SIMILARITY
+        );
+
+        if (strongMatches.length < MIN_STRONG_MATCHES) {
+            const noContextAnswer = buildNoContextAnswer();
+
+            await supabaseAdmin.from("chat_messages").insert([
+                {
+                    company_id: companyId,
+                    conversation_id: conversationId,
+                    role: "user",
+                    content: question,
+                },
+                {
+                    company_id: companyId,
+                    conversation_id: conversationId,
+                    role: "assistant",
+                    content: noContextAnswer,
+                },
+            ]);
+
+            return NextResponse.json({
+                answer: noContextAnswer,
+                sources: [],
+                conversationId,
+            });
+        }
+
+        const context = strongMatches
             .map((r) => {
                 const filename = r.filename || "Documento desconocido";
                 return `[Documento: ${filename}]\n${r.content}`;
@@ -140,7 +178,8 @@ Reglas:
 - Respondé en formato simple y fácil de leer.
 - No menciones "fragmentos".
 - Priorizá nombrar documentos de forma natural.
-- Si no está la respuesta, decí exactamente: "No encontré esa información en los documentos cargados."
+- Si la información no alcanza o no responde exactamente la pregunta, decí exactamente:
+"No encontré información suficiente en los documentos cargados para responder con confianza."
 
 Contexto:
 ${context}
@@ -149,16 +188,15 @@ Pregunta:
 ${question}
 `;
 
-        const openai = getOpenAI();
-
-        const response = await openai.responses.create({
+        const openAI = getOpenAI();
+        const response = await openAI.responses.create({
             model: "gpt-4.1-mini",
             input: prompt,
         });
 
         const answer =
             response.output_text?.trim() ||
-            "No encontré esa información en los documentos cargados.";
+            "No encontré información suficiente en los documentos cargados para responder con confianza.";
 
         await supabaseAdmin.from("chat_messages").insert([
             {
@@ -178,7 +216,7 @@ ${question}
         return NextResponse.json({
             answer,
             conversationId,
-            sources: ranked.map((r) => ({
+            sources: strongMatches.map((r) => ({
                 documentId: r.document_id,
                 filename: r.filename || "Documento desconocido",
                 preview: r.content.slice(0, 180),
