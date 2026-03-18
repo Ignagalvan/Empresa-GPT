@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { createEmbedding } from "@/lib/embeddings";
-
 import { getOpenAI } from "@/lib/openai";
 
 type ChunkRow = {
@@ -22,6 +21,7 @@ export async function POST(req: Request) {
         const companyId = body?.companyId?.trim?.();
         const question = body?.question?.trim?.();
         const documentId = body?.documentId?.trim?.();
+        let conversationId = body?.conversationId?.trim?.();
 
         if (documentId && documentId.length < 5) {
             return NextResponse.json(
@@ -49,6 +49,27 @@ export async function POST(req: Request) {
                 { error: "La pregunta es demasiado corta." },
                 { status: 400 }
             );
+        }
+
+        if (!conversationId) {
+            const generatedTitle =
+                question.length > 60 ? `${question.slice(0, 60)}...` : question;
+
+            const { data: conversation, error: conversationError } =
+                await supabaseAdmin
+                    .from("chat_conversations")
+                    .insert({
+                        company_id: companyId,
+                        title: generatedTitle,
+                    })
+                    .select("id")
+                    .single();
+
+            if (conversationError) {
+                throw conversationError;
+            }
+
+            conversationId = conversation.id;
         }
 
         const questionEmbedding = await createEmbedding(question);
@@ -79,9 +100,25 @@ export async function POST(req: Request) {
         const ranked = (data || []) as ChunkRow[];
 
         if (ranked.length === 0) {
+            await supabaseAdmin.from("chat_messages").insert([
+                {
+                    company_id: companyId,
+                    conversation_id: conversationId,
+                    role: "user",
+                    content: question,
+                },
+                {
+                    company_id: companyId,
+                    conversation_id: conversationId,
+                    role: "assistant",
+                    content: "No encontré documentos cargados para esa empresa.",
+                },
+            ]);
+
             return NextResponse.json({
                 answer: "No encontré documentos cargados para esa empresa.",
                 sources: [],
+                conversationId,
             });
         }
 
@@ -94,13 +131,16 @@ export async function POST(req: Request) {
 
         const prompt = `
 Sos un asistente interno de una empresa.
-Respondé únicamente usando el contexto provisto.
 
-Si encontrás información diferente o múltiples respuestas posibles entre los fragmentos,
-explicalo claramente y listá cada caso por separado indicando de qué fragmento o documento surge.
+Tu objetivo es responder de forma clara, simple y útil.
 
-Si la respuesta no está en el contexto, decí exactamente:
-"No encontré esa información en los documentos cargados."
+Reglas:
+- Usá únicamente el contexto provisto.
+- Si hay múltiples respuestas, comparalas claramente.
+- Respondé en formato simple y fácil de leer.
+- No menciones "fragmentos".
+- Priorizá nombrar documentos de forma natural.
+- Si no está la respuesta, decí exactamente: "No encontré esa información en los documentos cargados."
 
 Contexto:
 ${context}
@@ -121,14 +161,26 @@ ${question}
             "No encontré esa información en los documentos cargados.";
 
         await supabaseAdmin.from("chat_messages").insert([
-            { company_id: companyId, role: "user", content: question },
-            { company_id: companyId, role: "assistant", content: answer },
+            {
+                company_id: companyId,
+                conversation_id: conversationId,
+                role: "user",
+                content: question,
+            },
+            {
+                company_id: companyId,
+                conversation_id: conversationId,
+                role: "assistant",
+                content: answer,
+            },
         ]);
 
         return NextResponse.json({
             answer,
+            conversationId,
             sources: ranked.map((r) => ({
                 documentId: r.document_id,
+                filename: r.filename || "Documento desconocido",
                 preview: r.content.slice(0, 180),
                 score: r.similarity,
             })),
