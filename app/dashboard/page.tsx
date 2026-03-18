@@ -37,6 +37,7 @@ export default function DashboardPage() {
     const [documents, setDocuments] = useState<DocumentItem[]>([]);
     const [documentsLoading, setDocumentsLoading] = useState(false);
     const [sources, setSources] = useState<SourceItem[]>([]);
+    const [selectedDocumentId, setSelectedDocumentId] = useState<string>("");
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -216,6 +217,7 @@ export default function DashboardPage() {
                 body: JSON.stringify({
                     companyId,
                     question,
+                    documentId: selectedDocumentId || undefined,
                 }),
             });
 
@@ -234,6 +236,58 @@ export default function DashboardPage() {
             setSources([]);
         } finally {
             setAsking(false);
+        }
+    }
+
+    async function handleDeleteDocument(documentId: string) {
+        try {
+            if (!companyId.trim()) {
+                setMessageType("error");
+                setMessage("Primero ingresá el Company ID.");
+                return;
+            }
+
+            const confirmed = window.confirm(
+                "¿Seguro que querés eliminar este documento? Esta acción no se puede deshacer."
+            );
+
+            if (!confirmed) {
+                return;
+            }
+
+            setMessage("");
+            setMessageType("");
+
+            const res = await fetch("/api/documents/delete", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    companyId,
+                    documentId,
+                }),
+            });
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                setMessageType("error");
+                setMessage(data.error || "No se pudo eliminar el documento.");
+                return;
+            }
+
+            if (selectedDocumentId === documentId) {
+                setSelectedDocumentId("");
+            }
+
+            setMessageType("success");
+            setMessage("Documento eliminado correctamente.");
+
+            await loadDocuments(companyId);
+        } catch {
+            setMessageType("error");
+            setMessage("Ocurrió un error al eliminar el documento.");
         }
     }
 
@@ -413,8 +467,8 @@ export default function DashboardPage() {
                                                 clearCurrentForm();
                                             }}
                                             className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${mode === "pdf"
-                                                    ? "bg-cyan-400 text-slate-950"
-                                                    : "border border-white/10 bg-white/5 text-white"
+                                                ? "bg-cyan-400 text-slate-950"
+                                                : "border border-white/10 bg-white/5 text-white"
                                                 }`}
                                         >
                                             Subir PDF
@@ -426,8 +480,8 @@ export default function DashboardPage() {
                                                 clearCurrentForm();
                                             }}
                                             className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${mode === "manual"
-                                                    ? "bg-cyan-400 text-slate-950"
-                                                    : "border border-white/10 bg-white/5 text-white"
+                                                ? "bg-cyan-400 text-slate-950"
+                                                : "border border-white/10 bg-white/5 text-white"
                                                 }`}
                                         >
                                             Pegar texto manual
@@ -562,11 +616,22 @@ export default function DashboardPage() {
                                                     key={doc.id}
                                                     className="rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3"
                                                 >
-                                                    <div className="font-medium text-white">
-                                                        {doc.filename}
-                                                    </div>
-                                                    <div className="mt-1 text-xs text-slate-400">
-                                                        {new Date(doc.created_at).toLocaleString()}
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div>
+                                                            <div className="font-medium text-white">
+                                                                {doc.filename}
+                                                            </div>
+                                                            <div className="mt-1 text-xs text-slate-400">
+                                                                {new Date(doc.created_at).toLocaleString()}
+                                                            </div>
+                                                        </div>
+
+                                                        <button
+                                                            onClick={() => handleDeleteDocument(doc.id)}
+                                                            className="rounded-xl border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-300 transition hover:bg-rose-400/20"
+                                                        >
+                                                            Eliminar
+                                                        </button>
                                                     </div>
                                                 </div>
                                             ))}
@@ -587,6 +652,25 @@ export default function DashboardPage() {
                                     </div>
 
                                     <div className="space-y-4">
+                                        <div>
+                                            <label className="mb-2 block text-sm font-medium text-slate-200">
+                                                Documento (opcional)
+                                            </label>
+
+                                            <select
+                                                className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20"
+                                                value={selectedDocumentId}
+                                                onChange={(e) => setSelectedDocumentId(e.target.value)}
+                                            >
+                                                <option value="">Todos los documentos</option>
+
+                                                {documents.map((doc) => (
+                                                    <option key={doc.id} value={doc.id}>
+                                                        {doc.filename}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
                                         <div>
                                             <label className="mb-2 block text-sm font-medium text-slate-200">
                                                 Pregunta

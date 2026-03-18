@@ -113,7 +113,7 @@ export async function POST(req: Request) {
                     company_id: companyId,
                     chunk_index: i,
                     content: chunks[i],
-                    embedding,
+                    embedding: `[${embedding.join(",")}]`,
                 });
 
             if (chunkError) {

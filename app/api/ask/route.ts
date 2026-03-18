@@ -1,17 +1,17 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { createEmbedding } from "@/lib/embeddings";
-import { cosineSimilarity } from "@/lib/cosineSimilarity";
+
 import { getOpenAI } from "@/lib/openai";
 
 type ChunkRow = {
     id: string;
     content: string;
-    embedding: number[];
     document_id: string;
-    documents?: {
-        filename?: string;
-    } | null;
+    company_id: string;
+    chunk_index: number;
+    similarity: number;
+    filename?: string;
 };
 
 export async function POST(req: Request) {
@@ -21,6 +21,14 @@ export async function POST(req: Request) {
         const body = await req.json();
         const companyId = body?.companyId?.trim?.();
         const question = body?.question?.trim?.();
+        const documentId = body?.documentId?.trim?.();
+
+        if (documentId && documentId.length < 5) {
+            return NextResponse.json(
+                { error: "El documentId no es válido." },
+                { status: 400 }
+            );
+        }
 
         if (!companyId) {
             return NextResponse.json(
@@ -45,40 +53,54 @@ export async function POST(req: Request) {
 
         const questionEmbedding = await createEmbedding(question);
 
-        const { data, error } = await supabaseAdmin
-            .from("document_chunks")
-            .select(`id, content, embedding, document_id, documents (filename)`)
-            .eq("company_id", companyId);
+        const rpcName = documentId
+            ? "match_document_chunks_by_document"
+            : "match_document_chunks";
+
+        const rpcParams = documentId
+            ? {
+                query_embedding: `[${questionEmbedding.join(",")}]`,
+                match_company_id: companyId,
+                match_document_id: documentId,
+                match_count: 5,
+            }
+            : {
+                query_embedding: `[${questionEmbedding.join(",")}]`,
+                match_company_id: companyId,
+                match_count: 5,
+            };
+
+        const { data, error } = await supabaseAdmin.rpc(rpcName, rpcParams);
 
         if (error) {
             throw error;
         }
 
-        const chunks = (data || []) as ChunkRow[];
+        const ranked = (data || []) as ChunkRow[];
 
-        if (chunks.length === 0) {
+        if (ranked.length === 0) {
             return NextResponse.json({
                 answer: "No encontré documentos cargados para esa empresa.",
                 sources: [],
             });
         }
 
-        const ranked = chunks
-            .map((chunk) => ({
-                ...chunk,
-                score: cosineSimilarity(questionEmbedding, chunk.embedding),
-            }))
-            .sort((a, b) => b.score - a.score)
-            .slice(0, 5);
-
         const context = ranked
-            .map((r, i) => `[Fragmento ${i + 1}]\n${r.content}`)
+            .map((r) => {
+                const filename = r.filename || "Documento desconocido";
+                return `[Documento: ${filename}]\n${r.content}`;
+            })
             .join("\n\n");
 
         const prompt = `
 Sos un asistente interno de una empresa.
 Respondé únicamente usando el contexto provisto.
-Si la respuesta no está en el contexto, decí exactamente: "No encontré esa información en los documentos cargados."
+
+Si encontrás información diferente o múltiples respuestas posibles entre los fragmentos,
+explicalo claramente y listá cada caso por separado indicando de qué fragmento o documento surge.
+
+Si la respuesta no está en el contexto, decí exactamente:
+"No encontré esa información en los documentos cargados."
 
 Contexto:
 ${context}
@@ -106,9 +128,9 @@ ${question}
         return NextResponse.json({
             answer,
             sources: ranked.map((r) => ({
-                documentId: r.documents?.filename || r.document_id,
+                documentId: r.document_id,
                 preview: r.content.slice(0, 180),
-                score: r.score,
+                score: r.similarity,
             })),
         });
     } catch (error) {
