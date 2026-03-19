@@ -19,6 +19,13 @@ type MessageIntent =
     | "too_short"
     | "unclear";
 
+type Source = {
+    documentId: string;
+    filename?: string;
+    preview: string;
+    score: number;
+};
+
 const MIN_SIMILARITY = 0.35;
 const MIN_STRONG_MATCHES = 1;
 const MATCH_COUNT = 10;
@@ -76,6 +83,15 @@ function diversifyChunks(chunks: ChunkRow[]) {
     return diversified;
 }
 
+function buildSources(chunks: ChunkRow[]): Source[] {
+    return chunks.map((r) => ({
+        documentId: r.document_id,
+        filename: r.filename || "Documento desconocido",
+        preview: r.content.slice(0, 180),
+        score: r.similarity,
+    }));
+}
+
 async function createConversationIfNeeded(
     supabaseAdmin: ReturnType<typeof getSupabaseAdmin>,
     companyId: string,
@@ -109,7 +125,8 @@ async function saveMessages(
     companyId: string,
     conversationId: string,
     userMessage: string,
-    assistantMessage: string
+    assistantMessage: string,
+    assistantSources: Source[] = []
 ) {
     await supabaseAdmin.from("chat_messages").insert([
         {
@@ -117,12 +134,14 @@ async function saveMessages(
             conversation_id: conversationId,
             role: "user",
             content: userMessage,
+            sources: null,
         },
         {
             company_id: companyId,
             conversation_id: conversationId,
             role: "assistant",
             content: assistantMessage,
+            sources: assistantSources,
         },
     ]);
 }
@@ -273,7 +292,8 @@ export async function POST(req: Request) {
                 companyId,
                 conversationId,
                 question,
-                answer
+                answer,
+                []
             );
 
             return NextResponse.json({
@@ -325,7 +345,8 @@ export async function POST(req: Request) {
                 companyId,
                 conversationId,
                 question,
-                noDocumentsAnswer
+                noDocumentsAnswer,
+                []
             );
 
             return NextResponse.json({
@@ -347,7 +368,8 @@ export async function POST(req: Request) {
                 companyId,
                 conversationId,
                 question,
-                noContextAnswer
+                noContextAnswer,
+                []
             );
 
             return NextResponse.json({
@@ -367,7 +389,8 @@ export async function POST(req: Request) {
                 companyId,
                 conversationId,
                 question,
-                noContextAnswer
+                noContextAnswer,
+                []
             );
 
             return NextResponse.json({
@@ -413,24 +436,21 @@ ${question}
         });
 
         const answer = response.output_text?.trim() || buildNoContextAnswer();
+        const finalSources = buildSources(finalChunks);
 
         await saveMessages(
             supabaseAdmin,
             companyId,
             conversationId,
             question,
-            answer
+            answer,
+            finalSources
         );
 
         return NextResponse.json({
             answer,
             conversationId,
-            sources: finalChunks.map((r) => ({
-                documentId: r.document_id,
-                filename: r.filename || "Documento desconocido",
-                preview: r.content.slice(0, 180),
-                score: r.similarity,
-            })),
+            sources: finalSources,
         });
     } catch (error) {
         console.error("Error en /api/ask:", error);

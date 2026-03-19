@@ -29,7 +29,7 @@ export async function GET(req: Request) {
             conversations: data || [],
         });
     } catch (error) {
-        console.error("Error en /api/chat-conversations:", error);
+        console.error("Error en /api/chat-conversations GET:", error);
 
         return NextResponse.json(
             {
@@ -37,6 +37,85 @@ export async function GET(req: Request) {
                     error instanceof Error
                         ? error.message
                         : "No se pudieron obtener las conversaciones.",
+            },
+            { status: 500 }
+        );
+    }
+}
+
+export async function DELETE(req: Request) {
+    const supabaseAdmin = getSupabaseAdmin();
+
+    try {
+        const body = await req.json();
+        const conversationId = body?.conversationId?.trim?.() || "";
+
+        if (!conversationId) {
+            return NextResponse.json(
+                { error: "Falta el conversationId." },
+                { status: 400 }
+            );
+        }
+
+        const { data: existingConversation, error: existingError } =
+            await supabaseAdmin
+                .from("chat_conversations")
+                .select("id")
+                .eq("id", conversationId)
+                .maybeSingle();
+
+        if (existingError) {
+            throw existingError;
+        }
+
+        if (!existingConversation) {
+            return NextResponse.json(
+                { error: "La conversación no existe." },
+                { status: 404 }
+            );
+        }
+
+        const { error: messagesError } = await supabaseAdmin
+            .from("chat_messages")
+            .delete()
+            .eq("conversation_id", conversationId);
+
+        if (messagesError) {
+            throw messagesError;
+        }
+
+        const { data: deletedConversation, error: conversationError } =
+            await supabaseAdmin
+                .from("chat_conversations")
+                .delete()
+                .eq("id", conversationId)
+                .select("id")
+                .maybeSingle();
+
+        if (conversationError) {
+            throw conversationError;
+        }
+
+        if (!deletedConversation) {
+            return NextResponse.json(
+                { error: "No se pudo eliminar la conversación." },
+                { status: 500 }
+            );
+        }
+
+        return NextResponse.json({
+            ok: true,
+            deletedConversationId: deletedConversation.id,
+        });
+    } catch (error) {
+        console.error("Error en /api/chat-conversations DELETE:", error);
+
+        return NextResponse.json(
+            {
+                error:
+                    error instanceof Error
+                        ? error.message
+                        : "No se pudo eliminar la conversación.",
             },
             { status: 500 }
         );

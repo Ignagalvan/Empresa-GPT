@@ -2,22 +2,22 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
 export async function GET(req: Request) {
-    const supabaseAdmin = getSupabaseAdmin();
+    const { searchParams } = new URL(req.url);
+    const conversationId = searchParams.get("conversationId")?.trim();
+
+    if (!conversationId) {
+        return NextResponse.json(
+            { error: "Falta el conversationId." },
+            { status: 400 }
+        );
+    }
 
     try {
-        const { searchParams } = new URL(req.url);
-        const conversationId = searchParams.get("conversationId")?.trim() || "";
-
-        if (!conversationId) {
-            return NextResponse.json(
-                { error: "Falta el conversationId." },
-                { status: 400 }
-            );
-        }
+        const supabaseAdmin = getSupabaseAdmin();
 
         const { data, error } = await supabaseAdmin
             .from("chat_messages")
-            .select("id, role, content, created_at")
+            .select("id, role, content, created_at, sources")
             .eq("conversation_id", conversationId)
             .order("created_at", { ascending: true });
 
@@ -36,7 +36,7 @@ export async function GET(req: Request) {
                 error:
                     error instanceof Error
                         ? error.message
-                        : "No se pudieron obtener los mensajes.",
+                        : "Error al obtener los mensajes.",
             },
             { status: 500 }
         );

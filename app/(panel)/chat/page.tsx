@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCompanyContext } from "@/hooks/useCompanyContext";
 
 type Source = {
@@ -16,7 +16,7 @@ type Message = {
     role: "user" | "assistant";
     content: string;
     created_at?: string;
-    sources?: Source[];
+    sources?: Source[] | null;
 };
 
 type Conversation = {
@@ -24,38 +24,6 @@ type Conversation = {
     title: string | null;
     created_at: string;
 };
-
-function getConversationCacheKey(companyId: string, conversationId: string) {
-    return `empresa_gpt_chat_cache:${companyId}:${conversationId}`;
-}
-
-function mergeMessagesWithCache(
-    fetchedMessages: Message[],
-    cachedMessages: Message[]
-): Message[] {
-    return fetchedMessages.map((msg, index) => {
-        if (msg.sources && msg.sources.length > 0) {
-            return msg;
-        }
-
-        const cached = cachedMessages[index];
-
-        if (
-            cached &&
-            cached.role === msg.role &&
-            cached.content === msg.content &&
-            cached.sources &&
-            cached.sources.length > 0
-        ) {
-            return {
-                ...msg,
-                sources: cached.sources,
-            };
-        }
-
-        return msg;
-    });
-}
 
 function formatConversationDate(value: string) {
     const date = new Date(value);
@@ -66,18 +34,24 @@ function formatConversationDate(value: string) {
         date.getMonth() === now.getMonth() &&
         date.getDate() === now.getDate();
 
+    const locale =
+        typeof navigator !== "undefined" && navigator.language
+            ? navigator.language
+            : "es-AR";
+
     if (sameDay) {
-        return date.toLocaleTimeString([], {
+        return new Intl.DateTimeFormat(locale, {
             hour: "2-digit",
             minute: "2-digit",
-        });
+            hour12: false,
+        }).format(date);
     }
 
-    return date.toLocaleDateString([], {
+    return new Intl.DateTimeFormat(locale, {
         day: "2-digit",
         month: "2-digit",
         year: "2-digit",
-    });
+    }).format(date);
 }
 
 export default function ChatPage() {
@@ -95,16 +69,14 @@ export default function ChatPage() {
     const [expandedSources, setExpandedSources] = useState<
         Record<string, boolean>
     >({});
+    const [deletingConversationId, setDeletingConversationId] = useState<
+        string | null
+    >(null);
 
     const bottomRef = useRef<HTMLDivElement | null>(null);
 
     const hasCompany = Boolean(companyId?.trim());
     const inputDisabled = !hasCompany || loading;
-
-    const cacheKey = useMemo(() => {
-        if (!companyId || !selectedConversationId) return null;
-        return getConversationCacheKey(companyId, selectedConversationId);
-    }, [companyId, selectedConversationId]);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -133,19 +105,7 @@ export default function ChatPage() {
 
         setExpandedSources({});
         loadMessages(selectedConversationId);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedConversationId]);
-
-    useEffect(() => {
-        if (!cacheKey) return;
-        if (messages.length === 0) return;
-
-        try {
-            sessionStorage.setItem(cacheKey, JSON.stringify(messages));
-        } catch {
-            // noop
-        }
-    }, [cacheKey, messages]);
 
     async function loadConversations() {
         if (!companyId) return;
@@ -166,6 +126,13 @@ export default function ChatPage() {
             if (!selectedConversationId && list.length > 0) {
                 setSelectedConversationId(list[0].id);
             }
+
+            if (
+                selectedConversationId &&
+                !list.some((c: Conversation) => c.id === selectedConversationId)
+            ) {
+                setSelectedConversationId(list[0]?.id || null);
+            }
         } finally {
             setLoadingConversations(false);
         }
@@ -185,21 +152,7 @@ export default function ChatPage() {
                 return;
             }
 
-            const fetchedMessages: Message[] = data.messages || [];
-
-            let cachedMessages: Message[] = [];
-            if (companyId) {
-                try {
-                    const raw = sessionStorage.getItem(
-                        getConversationCacheKey(companyId, conversationId)
-                    );
-                    cachedMessages = raw ? JSON.parse(raw) : [];
-                } catch {
-                    cachedMessages = [];
-                }
-            }
-
-            setMessages(mergeMessagesWithCache(fetchedMessages, cachedMessages));
+            setMessages(data.messages || []);
         } finally {
             setLoadingMessages(false);
         }
@@ -246,7 +199,7 @@ export default function ChatPage() {
 
             const returnedConversationId = data.conversationId as string | undefined;
 
-            if (returnedConversationId && !selectedConversationId) {
+            if (returnedConversationId) {
                 setSelectedConversationId(returnedConversationId);
             }
 
@@ -313,6 +266,48 @@ export default function ChatPage() {
         }
     }
 
+    async function deleteConversation(conversationId: string) {
+        const confirmed = window.confirm(
+            "¿Querés eliminar esta conversación? Esta acción no se puede deshacer."
+        );
+
+        if (!confirmed) return;
+
+        try {
+            setDeletingConversationId(conversationId);
+
+            const res = await fetch("/api/chat-conversations", {
+                method: "DELETE",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ conversationId }),
+            });
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                alert(data.error || "No se pudo eliminar la conversación.");
+                return;
+            }
+
+            setConversations((prev) => prev.filter((c) => c.id !== conversationId));
+
+            if (selectedConversationId === conversationId) {
+                const remaining = conversations.filter((c) => c.id !== conversationId);
+                const nextConversationId = remaining[0]?.id || null;
+                setSelectedConversationId(nextConversationId);
+                if (!nextConversationId) {
+                    setMessages([]);
+                }
+            }
+        } catch {
+            alert("No se pudo eliminar la conversación.");
+        } finally {
+            setDeletingConversationId(null);
+        }
+    }
+
     function newChat() {
         if (!hasCompany) return;
         setSelectedConversationId(null);
@@ -375,14 +370,14 @@ export default function ChatPage() {
                         <div className="space-y-2">
                             {conversations.map((conversation) => {
                                 const active = selectedConversationId === conversation.id;
+                                const isDeleting = deletingConversationId === conversation.id;
 
                                 return (
-                                    <button
+                                    <div
                                         key={conversation.id}
-                                        onClick={() => setSelectedConversationId(conversation.id)}
-                                        className={`group relative w-full overflow-hidden rounded-2xl border px-4 py-3 text-left transition ${active
-                                                ? "border-cyan-400/30 bg-cyan-400/15 shadow-[0_0_0_1px_rgba(34,211,238,0.08)]"
-                                                : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10"
+                                        className={`group relative overflow-hidden rounded-2xl border transition ${active
+                                            ? "border-cyan-400/30 bg-cyan-400/15 shadow-[0_0_0_1px_rgba(34,211,238,0.08)]"
+                                            : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10"
                                             }`}
                                     >
                                         <div
@@ -390,12 +385,15 @@ export default function ChatPage() {
                                                 }`}
                                         />
 
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div className="min-w-0 flex-1">
+                                        <div className="flex items-start gap-2 px-4 py-3">
+                                            <button
+                                                onClick={() => setSelectedConversationId(conversation.id)}
+                                                className="min-w-0 flex-1 text-left"
+                                            >
                                                 <div
                                                     className={`truncate text-sm font-semibold ${active
-                                                            ? "text-cyan-100"
-                                                            : "text-white group-hover:text-slate-100"
+                                                        ? "text-cyan-100"
+                                                        : "text-white group-hover:text-slate-100"
                                                         }`}
                                                 >
                                                     {conversation.title || "Sin título"}
@@ -407,18 +405,30 @@ export default function ChatPage() {
                                                 >
                                                     Conversación guardada
                                                 </div>
-                                            </div>
+                                            </button>
 
-                                            <div
-                                                className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-medium ${active
+                                            <div className="flex shrink-0 items-center gap-2">
+                                                <div
+                                                    className={`rounded-full px-2 py-1 text-[11px] font-medium ${active
                                                         ? "bg-cyan-300/15 text-cyan-100"
                                                         : "bg-black/20 text-slate-400"
-                                                    }`}
-                                            >
-                                                {formatConversationDate(conversation.created_at)}
+                                                        }`}
+                                                >
+                                                    {formatConversationDate(conversation.created_at)}
+                                                </div>
+
+                                                <button
+                                                    type="button"
+                                                    onClick={() => deleteConversation(conversation.id)}
+                                                    disabled={isDeleting}
+                                                    className="rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-slate-300 transition hover:border-red-400/30 hover:bg-red-400/10 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    title="Eliminar conversación"
+                                                >
+                                                    {isDeleting ? "..." : "✕"}
+                                                </button>
                                             </div>
                                         </div>
-                                    </button>
+                                    </div>
                                 );
                             })}
                         </div>
