@@ -25,6 +25,13 @@ type Conversation = {
     created_at: string;
 };
 
+type GroupedSource = {
+    filename: string;
+    documentId: string;
+    items: Source[];
+    bestScore: number;
+};
+
 function formatConversationDate(value: string) {
     const date = new Date(value);
     const now = new Date();
@@ -54,29 +61,94 @@ function formatConversationDate(value: string) {
     }).format(date);
 }
 
+function groupSourcesByDocument(sources: Source[] = []): GroupedSource[] {
+    const map = new Map<string, GroupedSource>();
+
+    for (const source of sources) {
+        const key = source.documentId || source.filename || "unknown";
+        const existing = map.get(key);
+
+        if (!existing) {
+            map.set(key, {
+                filename: source.filename || "Documento desconocido",
+                documentId: source.documentId,
+                items: [source],
+                bestScore: source.score || 0,
+            });
+            continue;
+        }
+
+        existing.items.push(source);
+        existing.bestScore = Math.max(existing.bestScore, source.score || 0);
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.bestScore - a.bestScore);
+}
+
+function truncateText(text: string, maxLength = 220) {
+    if (!text) return "";
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, maxLength)}...`;
+}
+
+function CopyIcon() {
+    return (
+        <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            className="h-4 w-4"
+        >
+            <rect x="9" y="9" width="10" height="10" rx="2" />
+            <path d="M5 15V7a2 2 0 0 1 2-2h8" />
+        </svg>
+    );
+}
+
+function CheckIcon() {
+    return (
+        <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            className="h-4 w-4"
+        >
+            <path d="M20 6 9 17l-5-5" />
+        </svg>
+    );
+}
+
 export default function ChatPage() {
     const { companyId } = useCompanyContext();
 
     const [conversations, setConversations] = useState<Conversation[]>([]);
-    const [selectedConversationId, setSelectedConversationId] = useState<
-        string | null
-    >(null);
+    const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
     const [loadingConversations, setLoadingConversations] = useState(false);
     const [loadingMessages, setLoadingMessages] = useState(false);
-    const [expandedSources, setExpandedSources] = useState<
-        Record<string, boolean>
-    >({});
-    const [deletingConversationId, setDeletingConversationId] = useState<
-        string | null
-    >(null);
+    const [expandedSources, setExpandedSources] = useState<Record<string, boolean>>({});
+    const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
+    const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
 
     const bottomRef = useRef<HTMLDivElement | null>(null);
 
     const hasCompany = Boolean(companyId?.trim());
     const inputDisabled = !hasCompany || loading;
+
+    const quickPrompts = [
+        "¿Qué documentos hay cargados?",
+        "Resumí el contenido principal",
+        "Compará los documentos cargados",
+        "¿Qué información importante aparece en los documentos?",
+        "¿En qué documento se habla de este tema?",
+        "Explicame esto de forma simple",
+    ];
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -158,10 +230,12 @@ export default function ChatPage() {
         }
     }
 
-    async function sendMessage() {
-        if (!input.trim() || loading || !hasCompany) return;
+    async function sendMessage(prefilledText?: string) {
+        const textToSend = (prefilledText ?? input).trim();
 
-        const userText = input.trim();
+        if (!textToSend || loading || !hasCompany) return;
+
+        const userText = textToSend;
         const userMessage: Message = {
             role: "user",
             content: userText,
@@ -217,9 +291,12 @@ export default function ChatPage() {
                 },
             ]);
 
-            for (let i = 0; i < fullText.length; i++) {
-                await new Promise((resolve) => setTimeout(resolve, 10));
-                currentText += fullText[i];
+            const chunkSize = fullText.length > 1200 ? 6 : fullText.length > 600 ? 4 : 2;
+            const delayMs = fullText.length > 1200 ? 4 : fullText.length > 600 ? 6 : 10;
+
+            for (let i = 0; i < fullText.length; i += chunkSize) {
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+                currentText += fullText.slice(i, i + chunkSize);
 
                 setMessages((prev) => {
                     const updated = [...prev];
@@ -291,10 +368,10 @@ export default function ChatPage() {
                 return;
             }
 
-            setConversations((prev) => prev.filter((c) => c.id !== conversationId));
+            const remaining = conversations.filter((c) => c.id !== conversationId);
+            setConversations(remaining);
 
             if (selectedConversationId === conversationId) {
-                const remaining = conversations.filter((c) => c.id !== conversationId);
                 const nextConversationId = remaining[0]?.id || null;
                 setSelectedConversationId(nextConversationId);
                 if (!nextConversationId) {
@@ -321,6 +398,19 @@ export default function ChatPage() {
             ...prev,
             [messageKey]: !prev[messageKey],
         }));
+    }
+
+    async function copyMessage(content: string, messageKey: string) {
+        try {
+            await navigator.clipboard.writeText(content);
+            setCopiedMessageKey(messageKey);
+
+            setTimeout(() => {
+                setCopiedMessageKey((current) => (current === messageKey ? null : current));
+            }, 1400);
+        } catch {
+            alert("No se pudo copiar el texto.");
+        }
     }
 
     return (
@@ -376,8 +466,8 @@ export default function ChatPage() {
                                     <div
                                         key={conversation.id}
                                         className={`group relative overflow-hidden rounded-2xl border transition ${active
-                                            ? "border-cyan-400/30 bg-cyan-400/15 shadow-[0_0_0_1px_rgba(34,211,238,0.08)]"
-                                            : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10"
+                                                ? "border-cyan-400/30 bg-cyan-400/15 shadow-[0_0_0_1px_rgba(34,211,238,0.08)]"
+                                                : "border-white/5 bg-white/5 hover:border-white/10 hover:bg-white/10"
                                             }`}
                                     >
                                         <div
@@ -392,8 +482,8 @@ export default function ChatPage() {
                                             >
                                                 <div
                                                     className={`truncate text-sm font-semibold ${active
-                                                        ? "text-cyan-100"
-                                                        : "text-white group-hover:text-slate-100"
+                                                            ? "text-cyan-100"
+                                                            : "text-white group-hover:text-slate-100"
                                                         }`}
                                                 >
                                                     {conversation.title || "Sin título"}
@@ -410,8 +500,8 @@ export default function ChatPage() {
                                             <div className="flex shrink-0 items-center gap-2">
                                                 <div
                                                     className={`rounded-full px-2 py-1 text-[11px] font-medium ${active
-                                                        ? "bg-cyan-300/15 text-cyan-100"
-                                                        : "bg-black/20 text-slate-400"
+                                                            ? "bg-cyan-300/15 text-cyan-100"
+                                                            : "bg-black/20 text-slate-400"
                                                         }`}
                                                 >
                                                     {formatConversationDate(conversation.created_at)}
@@ -448,6 +538,21 @@ export default function ChatPage() {
                             Empresa activa: {companyId}
                         </div>
                     )}
+
+                    {hasCompany && (
+                        <div className="mt-4 flex flex-wrap gap-2">
+                            {quickPrompts.map((prompt) => (
+                                <button
+                                    key={prompt}
+                                    type="button"
+                                    onClick={() => setInput(prompt)}
+                                    className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-slate-300 transition hover:border-cyan-400/30 hover:bg-cyan-400/10 hover:text-cyan-100"
+                                >
+                                    {prompt}
+                                </button>
+                            ))}
+                        </div>
+                    )}
                 </div>
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6 scroll-smooth">
@@ -466,13 +571,18 @@ export default function ChatPage() {
                             </div>
                         ) : messages.length === 0 ? (
                             <div className="rounded-2xl bg-white/5 p-5 text-slate-300">
-                                Empezá una conversación
+                                <p className="font-medium text-white">Empezá una conversación</p>
+                                <p className="mt-2">
+                                    Podés pedir resúmenes, comparaciones, saber qué documentos hay
+                                    cargados o hacer preguntas puntuales sobre su contenido.
+                                </p>
                             </div>
                         ) : (
                             messages.map((msg, i) => {
                                 const messageKey = `${msg.id || i}-${msg.role}`;
                                 const isExpanded = expandedSources[messageKey] ?? false;
                                 const sourceCount = msg.sources?.length || 0;
+                                const groupedSources = groupSourcesByDocument(msg.sources || []);
 
                                 return (
                                     <div
@@ -481,13 +591,30 @@ export default function ChatPage() {
                                             }`}
                                     >
                                         <div
-                                            className={`min-w-[140px] w-fit ${msg.role === "user" ? "max-w-[55%]" : "max-w-[60%]"
-                                                } rounded-2xl px-4 py-3 ${msg.role === "user"
-                                                    ? "bg-cyan-400 text-slate-950"
-                                                    : "bg-white/10 text-white"
+                                            className={`relative min-w-[140px] w-fit rounded-2xl px-4 py-3 ${msg.role === "user"
+                                                    ? "max-w-[55%] bg-cyan-400 text-slate-950"
+                                                    : "max-w-[72%] bg-white/10 text-white"
                                                 }`}
                                         >
-                                            <div className="whitespace-pre-wrap text-[15px] leading-relaxed">
+                                            {msg.role === "assistant" && msg.content && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => copyMessage(msg.content, messageKey)}
+                                                    title="Copiar respuesta"
+                                                    className="absolute right-3 top-3 rounded-lg border border-white/10 bg-black/20 p-2 text-slate-300 transition hover:bg-black/30 hover:text-white"
+                                                >
+                                                    {copiedMessageKey === messageKey ? (
+                                                        <CheckIcon />
+                                                    ) : (
+                                                        <CopyIcon />
+                                                    )}
+                                                </button>
+                                            )}
+
+                                            <div
+                                                className={`whitespace-pre-wrap text-[15px] leading-relaxed ${msg.role === "assistant" ? "pr-12" : ""
+                                                    }`}
+                                            >
                                                 {msg.content}
                                             </div>
 
@@ -505,23 +632,45 @@ export default function ChatPage() {
                                                     </button>
 
                                                     {isExpanded && (
-                                                        <div className="mt-3 space-y-2">
-                                                            {msg.sources?.map((source, idx) => (
+                                                        <div className="mt-3 space-y-3">
+                                                            {groupedSources.map((group) => (
                                                                 <div
-                                                                    key={`${source.documentId}-${idx}`}
-                                                                    className="rounded-xl border border-white/10 bg-black/20 p-3"
+                                                                    key={group.documentId || group.filename}
+                                                                    className="rounded-2xl border border-white/10 bg-black/20 p-3"
                                                                 >
                                                                     <div className="flex items-center justify-between gap-3">
-                                                                        <div className="truncate text-sm font-medium text-cyan-200">
-                                                                            {source.filename || "Documento"}
+                                                                        <div className="min-w-0">
+                                                                            <div className="truncate text-sm font-semibold text-cyan-200">
+                                                                                {group.filename}
+                                                                            </div>
+                                                                            <div className="mt-1 text-xs text-slate-400">
+                                                                                {group.items.length} fragmento
+                                                                                {group.items.length === 1 ? "" : "s"} relacionado
+                                                                                {group.items.length === 1 ? "" : "s"}
+                                                                            </div>
                                                                         </div>
-                                                                        <div className="shrink-0 text-xs text-slate-400">
-                                                                            {Math.round((source.score || 0) * 100)}%
+
+                                                                        <div className="shrink-0 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2 py-1 text-[11px] text-cyan-100">
+                                                                            {Math.round(group.bestScore * 100)}%
                                                                         </div>
                                                                     </div>
 
-                                                                    <div className="mt-2 text-sm leading-relaxed text-slate-300">
-                                                                        {source.preview}
+                                                                    <div className="mt-3 space-y-2">
+                                                                        {group.items.map((source, idx) => (
+                                                                            <div
+                                                                                key={`${group.documentId}-${idx}`}
+                                                                                className="rounded-xl border border-white/10 bg-white/5 p-3"
+                                                                            >
+                                                                                <div className="text-sm leading-relaxed text-slate-300">
+                                                                                    {truncateText(source.preview, 260)}
+                                                                                </div>
+
+                                                                                <div className="mt-2 text-[11px] text-slate-400">
+                                                                                    Relevancia del fragmento:{" "}
+                                                                                    {Math.round((source.score || 0) * 100)}%
+                                                                                </div>
+                                                                            </div>
+                                                                        ))}
                                                                     </div>
                                                                 </div>
                                                             ))}
@@ -533,6 +682,14 @@ export default function ChatPage() {
                                     </div>
                                 );
                             })
+                        )}
+
+                        {loading && (
+                            <div className="flex justify-start">
+                                <div className="max-w-[72%] rounded-2xl bg-white/10 px-4 py-3 text-sm text-slate-300">
+                                    Pensando...
+                                </div>
+                            </div>
                         )}
 
                         <div ref={bottomRef} />
@@ -560,7 +717,7 @@ export default function ChatPage() {
                         />
 
                         <button
-                            onClick={sendMessage}
+                            onClick={() => sendMessage()}
                             disabled={inputDisabled || !input.trim()}
                             className="rounded-xl bg-cyan-400 px-6 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
                         >
